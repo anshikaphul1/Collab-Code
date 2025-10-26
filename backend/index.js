@@ -1,6 +1,7 @@
 import express from 'express';
 import http from 'http';
 import {Server} from "socket.io";
+import path from 'path';
 const app=express()
 const server =http.createServer(app);
 const io=new Server(server,{
@@ -34,10 +35,52 @@ io.on("connection",(socket)=>{
         }
         rooms.get(roomId).add(userName)
         io.to(roomId).emit("userJoined", Array.from(rooms.get(currentRoom)));
-        console.log("user joined room", roomId)
+        // console.log("user joined room", roomId)
     });
+
+    socket.on("codeChange",({roomId,code})=>{
+        socket.to(roomId).emit("codeUpdate",code);
+    });
+
+    socket.on("leaveRoom",()=>{
+        if(currentRoom && currentUser){
+            rooms.get(currentRoom).delete(currentUser)
+            io.to(currentRoom).emit("userJoined", Array.from(rooms.get(currentRoom)));
+
+            socket.leave(currentRoom)
+
+            currentRoom=null;
+            currentUser=null;
+        }
+    });
+
+    socket.on("typing",({roomId,userName})=>{
+        socket.to(roomId).emit("userTyping",userName);
+    });
+
+    socket.on("languageChange",({roomId,language})=>{
+        io.to(roomId).emit("languageUpdate",language);
+    })
+
+
+
+    socket.on("disconnect",()=>{
+        if(currentRoom && currentUser){
+            rooms.get(currentRoom).delete(currentUser)
+            io.to(currentRoom).emit("userJoined", Array.from(rooms.get(currentRoom)));
+        }
+        console.log("user Disconnected");
+    })
 });
 const port=process.env.PORT ||5000;
+
+const __dirname=path.resolve()
+app.use(express.static(path.join(__dirname,"/frontend/dist")))
+app.use((req, res) => {
+  res.sendFile(path.join(__dirname, "frontend", "dist", "index.html"));
+});
+
+
 server.listen(port,()=>{
     console.log('server is working on port 5000');
 });

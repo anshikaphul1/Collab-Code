@@ -1,0 +1,246 @@
+import React, { useEffect, useState } from "react";
+import "./App.css";
+import Editor from "@monaco-editor/react";
+import io from "socket.io-client";
+
+// Connect socket
+const socket = io("http://localhost:5000");
+
+const App = () => {
+  const [joined, setJoined] = useState(false);
+  const [roomId, setRoomId] = useState("");
+  const [userName, setUserName] = useState("");
+  const [language, setLanguage] = useState("javascript"); // ✅ default lowercase
+  const [code, setCode] = useState("// Start coding together 🚀");
+  const [copySuccess, setCopySuccess] = useState("");
+  const [users, setUsers] = useState([]);
+
+  // ✅ Join a room
+  const joinRoom = () => {
+    if (roomId && userName) {
+      socket.emit("join", { roomId, userName });
+      setJoined(true);
+    }
+  };
+
+  // ✅ Copy room ID
+  const copyRoomId = () => {
+    navigator.clipboard.writeText(roomId);
+    setCopySuccess("Copied!");
+    setTimeout(() => setCopySuccess(""), 2000);
+  };
+
+  // ✅ Listen for code updates from other users
+  useEffect(() => {
+    socket.on("codeUpdate", (newCode) => {
+      setCode(newCode);
+    });
+
+    socket.on("userJoined", (userList) => {
+      setUsers(userList);
+    });
+
+    return () => {
+      socket.off("codeUpdate");
+      socket.off("userJoined");
+    };
+  }, []);
+
+  // ✅ Send code updates to others
+  const handleCodeChange = (newCode) => {
+    setCode(newCode);
+    socket.emit("codeChange", { roomId, code: newCode });
+  };
+
+  // ✅ Enable Monaco IntelliSense (suggestions/autocomplete)
+  const handleEditorWillMount = (monaco) => {
+    monaco.languages.typescript.javascriptDefaults.setEagerModelSync(true);
+    monaco.languages.typescript.javascriptDefaults.setCompilerOptions({
+      noLib: false,
+      allowNonTsExtensions: true,
+      target: monaco.languages.typescript.ScriptTarget.ESNext,
+    });
+  };
+
+  // ✅ If not joined yet
+  if (!joined) {
+    return (
+      <div className="join-container">
+        <div className="join-form">
+          <h1>Join Code Room</h1>
+          <input
+            type="text"
+            placeholder="Room Id"
+            value={roomId}
+            onChange={(e) => setRoomId(e.target.value)}
+          />
+          <input
+            type="text"
+            placeholder="User Name"
+            value={userName}
+            onChange={(e) => setUserName(e.target.value)}
+          />
+          <button onClick={joinRoom}>Join Room</button>
+        </div>
+      </div>
+    );
+  }
+
+  // ✅ Main editor screen
+  return (
+    <div className="editor-container">
+      <div className="sidebar">
+        <div className="room-info">
+          <h2>Code Room: {roomId}</h2>
+          <button onClick={copyRoomId} className="copy-button">
+            Copy Id
+          </button>
+          {copySuccess && <span className="copy-success">{copySuccess}</span>}
+        </div>
+
+        <h3>Users in Room:</h3>
+        <ul>
+          {users.map((u, index) => (
+            <li key={index}>{u}</li>
+          ))}
+        </ul>
+
+        <p className="typing-indicator">Collaborating live...</p>
+
+        <select
+          className="language-selector"
+          value={language}
+          onChange={(e) => setLanguage(e.target.value)}
+        >
+          <option value="javascript">JavaScript</option>
+          <option value="python">Python</option>
+          <option value="java">Java</option>
+          <option value="cpp">C++</option>
+        </select>
+
+        <button
+          className="leave-button"
+          onClick={() => {
+            socket.disconnect();
+            window.location.reload();
+          }}
+        >
+          Leave Room
+        </button>
+      </div>
+
+      <div className="editor-wrapper">
+        <Editor
+          height="100%"
+          language={language}
+          value={code}
+          onChange={handleCodeChange}
+          theme="vs-dark"
+          beforeMount={handleEditorWillMount}
+          options={{
+            minimap: { enabled: false },
+            fontSize: 15,
+            automaticLayout: true,
+          }}
+        />
+      </div>
+    </div>
+  );
+};
+
+export default App;
+
+
+index.js
+
+import express from 'express';
+import http from 'http';
+import { Server } from 'socket.io';
+import cors from 'cors';
+
+const app = express();
+app.use(cors());
+app.use(express.json());
+
+const server = http.createServer(app);
+const io = new Server(server, {
+  cors: {
+    origin: "*", // You can restrict this later to your frontend URL
+    methods: ["GET", "POST"],
+  },
+});
+
+const rooms = new Map();
+
+io.on("connection", (socket) => {
+  console.log("✅ User connected:", socket.id);
+
+  let currentRoom = null;
+  let currentUser = null;
+
+  // When user joins a room
+  socket.on("join", ({ roomId, userName }) => {
+    // Leave previous room if any
+    if (currentRoom) {
+      socket.leave(currentRoom);
+      if (rooms.has(currentRoom)) {
+        rooms.get(currentRoom).delete(currentUser);
+        io.to(currentRoom).emit("userJoined", Array.from(rooms.get(currentRoom)));
+      }
+    }
+
+    // Join new room
+    currentRoom = roomId;
+    currentUser = userName;
+    socket.join(roomId);
+
+    // Add user to room
+    if (!rooms.has(roomId)) {
+      rooms.set(roomId, new Set());
+    }
+    rooms.get(roomId).add(userName);
+
+    // Notify all users in room
+    io.to(roomId).emit("userJoined", Array.from(rooms.get(roomId)));
+    console.log(`👥 ${userName} joined room ${roomId}`);
+  });
+
+  // When code changes
+  socket.on("codeChange", ({ roomId, code }) => {
+    // Broadcast to all except sender
+    socket.to(roomId).emit("codeUpdate", code);
+  });
+
+  // When user leaves the room or disconnects
+  socket.on("disconnect", () => {
+    console.log("❌ User disconnected:", socket.id);
+    if (currentRoom && currentUser) {
+      const users = rooms.get(currentRoom);
+      if (users) {
+        users.delete(currentUser);
+        if (users.size === 0) {
+          rooms.delete(currentRoom);
+        } else {
+          io.to(currentRoom).emit("userJoined", Array.from(users));
+        }
+      }
+    }
+  });
+
+  // Optional: when user manually leaves
+  socket.on("leaveRoom", () => {
+    if (currentRoom && rooms.has(currentRoom)) {
+      rooms.get(currentRoom).delete(currentUser);
+      socket.leave(currentRoom);
+      io.to(currentRoom).emit("userJoined", Array.from(rooms.get(currentRoom)));
+      console.log(`🚪 ${currentUser} left room ${currentRoom}`);
+      currentRoom = null;
+      currentUser = null;
+    }
+  });
+});
+
+const port = process.env.PORT || 5000;
+server.listen(port, () => {
+  console.log(`🚀 Server is working on port ${port}`);
+});
