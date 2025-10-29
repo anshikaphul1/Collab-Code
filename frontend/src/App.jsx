@@ -3,6 +3,8 @@ import { useState } from 'react';
 import './App.css';
 import Editor from '@monaco-editor/react';
 import * as monaco from 'monaco-editor';
+import {v4 as uuid} from 'uuid';
+
 // socket se connection liya
 import io from 'socket.io-client';
 
@@ -18,6 +20,9 @@ const App = () => {
   const[copySuccess,setCopySuccess]=useState("");
   const[users,setUsers]=useState([]);
   const[typing,setTyping]=useState("");
+  const [outPut,setOutPut]=useState("");
+  const[version,setVersion]=useState("*");
+
 
   useEffect(()=>{
     socket.on("userJoined",(users)=>{
@@ -34,12 +39,19 @@ const App = () => {
 
     socket.on("languageUpdate",(newLanguage)=>{
       setLanguage(newLanguage);
-    })
+    });
+
+    socket.on("codeResponse",(response)=>{
+      setOutPut(response.run.output)
+    });
+
+
     return ()=>{
       socket.off("userJoined"); 
       socket.off("codeUpdate");
       socket.off("userTyping");
       socket.off("languageUpdate");
+      socket.off("codeResponse");
     }
   },[]);
 
@@ -90,11 +102,25 @@ const App = () => {
     setLanguage(newLanguage)
     socket.emit("languageChange",{roomId,language:newLanguage});
   }
+
+  const [userInput,setUserInput]=useState("");
+
+  const runCode=()=>{
+    socket.emit("compileCode",{code,roomId,language,version,input:userInput})
+  };
+
+  const createRoomId=()=>{
+    const roomId=uuid();
+    setRoomId(roomId);
+  }
+
+
   if(!joined){
     return <div className='join-container'>
       <div className="join-form">
         <h1>Join Code Room</h1>
         <input type="text" placeholder='Room Id' value={roomId} onChange={(e)=> setRoomId(e.target.value)} />
+        <button onClick={createRoomId}>create Id</button>
                 <input type="text" placeholder='UserName' value={userName} onChange={(e)=> setUserName(e.target.value)} />
                 <button onClick={joinRoom}>Join Room</button>
       </div>
@@ -129,7 +155,7 @@ const App = () => {
     </div>
     
     <div className="editor-wrapper">
-      <Editor height={"100%"} defaultLanguage={language}
+      <Editor height={"60%"} defaultLanguage={language}
       language={language} 
       value={code}
       onChange={handleCodeChange}
@@ -140,6 +166,15 @@ const App = () => {
           fontSize:14,
         }
       }/>
+
+      <textarea className='input-console' value={userInput} 
+      onChange={(e)=> setUserInput(e.target.value)} placeholder='Enter Input here...'></textarea>
+
+      <button className='run-btn' onClick={runCode}>Execute</button>
+      <textarea className='output-console' value={outPut} readOnly
+      placeholder='Output will appear here....'>
+
+      </textarea>
     </div>
   </div>;
 };
